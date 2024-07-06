@@ -1,115 +1,466 @@
 import 'package:flutter/material.dart';
+import 'package:vibration/vibration.dart';
+import 'package:qr_code_scanner/qr_code_scanner.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:audioplayers/audioplayers.dart'; // Audio package for alarm sounds
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import local notifications package
 
-void main() {
-  runApp(const MyApp());
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+  runApp(DualStageAlarmApp(flutterLocalNotificationsPlugin));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class DualStageAlarmApp extends StatelessWidget {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin;
 
-  // This widget is the root of your application.
+  DualStageAlarmApp(this.flutterLocalNotificationsPlugin);
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // Try running your application with "flutter run". You'll see the
-        // application has a blue toolbar. Then, without quitting the app, try
-        // changing the primarySwatch below to Colors.green and then invoke
-        // "hot reload" (press "r" in the console where you ran "flutter run",
-        // or simply save your changes to "hot reload" in a Flutter IDE).
-        // Notice that the counter didn't reset back to zero; the application
-        // is not restarted.
-        primarySwatch: Colors.blue,
-      ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: HomeScreen(flutterLocalNotificationsPlugin),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+class Alarm {
+  TimeOfDay time;
+  String sound;
+  bool vibration;
+  bool enabled;
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
+  Alarm({
+    required this.time,
+    required this.sound,
+    required this.vibration,
+    this.enabled = true,
+  });
 
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
+  Map<String, dynamic> toJson() => {
+        'time': {'hour': time.hour, 'minute': time.minute},
+        'sound': sound,
+        'vibration': vibration,
+        'enabled': enabled,
+      };
 
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  factory Alarm.fromJson(Map<String, dynamic> json) {
+    return Alarm(
+      time: TimeOfDay(hour: json['time']['hour'], minute: json['time']['minute']),
+      sound: json['sound'],
+      vibration: json['vibration'],
+      enabled: json['enabled'],
+    );
+  }
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class AlarmStorage {
+  static Future<String> get _localPath async {
+    final directory = await getApplicationDocumentsDirectory();
+    return directory.path;
+  }
 
-  void _incrementCounter() {
+  static Future<File> get _localFile async {
+    final path = await _localPath;
+    return File('$path/alarms.json');
+  }
+
+  static Future<List<Alarm>> loadAlarms() async {
+    try {
+      final file = await _localFile;
+      String contents = await file.readAsString();
+      List<dynamic> jsonData = json.decode(contents);
+      return jsonData.map((json) => Alarm.fromJson(json)).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  static Future<void> saveAlarms(List<Alarm> alarms) async {
+    final file = await _localFile;
+    List<Map<String, dynamic>> jsonData = alarms.map((alarm) => alarm.toJson()).toList();
+    await file.writeAsString(json.encode(jsonData));
+  }
+}
+
+class HomeScreen extends StatefulWidget {
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin;
+
+  HomeScreen(this.flutterLocalNotificationsPlugin);
+
+  @override
+  _HomeScreenState createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  List<Alarm> alarms = [];
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAlarms();
+    _initializeNotifications();
+  }
+
+  void _loadAlarms() async {
+    alarms = await AlarmStorage.loadAlarms();
+    setState(() {});
+    _scheduleNotifications();
+  }
+
+  void _saveAlarms() {
+    AlarmStorage.saveAlarms(alarms);
+    _scheduleNotifications();
+  }
+
+  void _deleteAlarm(int index) {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      alarms.removeAt(index);
+    });
+    _saveAlarms();
+  }
+
+  void _navigateToAddEditAlarm([Alarm? alarm, int? index]) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => AddEditAlarmScreen(alarm: alarm)),
+    );
+    if (result != null) {
+      if (index != null) {
+        setState(() {
+          alarms[index] = result;
+        });
+      } else {
+        setState(() {
+          alarms.add(result);
+        });
+      }
+      _saveAlarms();
+    }
+  }
+
+  void _initializeNotifications() {
+    var initializationSettingsAndroid =
+        AndroidInitializationSettings('app_icon');
+    var initializationSettingsIOS = IOSInitializationSettings();
+    var initializationSettings = InitializationSettings(
+        android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
+    flutterLocalNotificationsPlugin.initialize(initializationSettings);
+  }
+
+  void _scheduleNotifications() {
+    flutterLocalNotificationsPlugin.cancelAll();
+    alarms.forEach((alarm) {
+      if (alarm.enabled) {
+        var time = Time(alarm.time.hour, alarm.time.minute, 0);
+        var androidPlatformChannelSpecifics = AndroidNotificationDetails(
+          'alarm_channel',
+          'Alarms',
+          channelDescription: 'Channel for alarms',
+          importance: Importance.max,
+          priority: Priority.high,
+          sound: RawResourceAndroidNotificationSound('alarm_sound'),
+        );
+        var iOSPlatformChannelSpecifics = IOSNotificationDetails();
+        var platformChannelSpecifics = NotificationDetails(
+            android: androidPlatformChannelSpecifics,
+            iOS: iOSPlatformChannelSpecifics);
+        flutterLocalNotificationsPlugin.showDailyAtTime(
+          alarm.hashCode,
+          'Alarm',
+          'Time to wake up!',
+          time,
+          platformChannelSpecifics,
+        );
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
+    return Scaffold(
+      appBar: AppBar(title: Text('Dual-Stage Alarm')),
+      body: ListView.builder(
+        itemCount: alarms.length,
+        itemBuilder: (context, index) {
+          return ListTile(
+            title: Text(alarms[index].time.format(context)),
+            subtitle: Text(alarms[index].sound),
+            trailing: Switch(
+              value: alarms[index].enabled,
+              onChanged: (bool value) {
+                setState(() {
+                  alarms[index].enabled = value;
+                });
+                _saveAlarms();
+              },
+            ),
+            onTap: () {
+              _navigateToAddEditAlarm(alarms[index], index);
+            },
+            onLongPress: () {
+              _deleteAlarm(index);
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          _navigateToAddEditAlarm();
+        },
+        child: Icon(Icons.add),
+      ),
+    );
+  }
+}
+
+class AddEditAlarmScreen extends StatefulWidget {
+  final Alarm? alarm;
+
+  AddEditAlarmScreen({this.alarm});
+
+  @override
+  _AddEditAlarmScreenState createState() => _AddEditAlarmScreenState();
+}
+
+class _AddEditAlarmScreenState extends State<AddEditAlarmScreen> {
+  late TimeOfDay _time;
+  late String _sound;
+  bool _vibration = false;
+  final List<String> _sounds = [
+    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3',
+    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3',
+    'https://www.soundhelix.com/examples/mp3/SoundHelix-Song-3.mp3',
+  ];
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  String? _currentlyPlaying;
+
+  @override
+  void initState() {
+    super.initState();
+    _time = widget.alarm?.time ?? TimeOfDay.now();
+    _sound = widget.alarm?.sound ?? _sounds[0];
+    _vibration = widget.alarm?.vibration ?? false;
+  }
+
+  void _selectSound() async {
+    String? selectedSound = await showDialog<String>(
+      context: context,
+      builder: (BuildContext context) {
+        return StatefulBuilder(
+          builder: (BuildContext context, StateSetter setState) {
+            return SimpleDialog(
+              title: const Text('Select Sound'),
+              children: _sounds.map((String sound) {
+                bool isPlaying = _currentlyPlaying == sound;
+                return SimpleDialogOption(
+                  onPressed: () async {
+                    if (isPlaying) {
+                      await _audioPlayer.stop();
+                      setState(() {
+                        _currentlyPlaying = null;
+                      });
+                    } else {
+                      await _audioPlayer.setUrl(sound);
+                      await _audioPlayer.play(sound);
+                      setState(() {
+                        _currentlyPlaying = sound;
+                      });
+                    }
+                  },
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(sound.split('/').last),
+                      IconButton(
+                        icon: Icon(isPlaying ? Icons.pause : Icons.play_arrow),
+                        onPressed: () async {
+                          if (isPlaying) {
+                            await _audioPlayer.stop();
+                            setState(() {
+                              _currentlyPlaying = null;
+                            });
+                          } else {
+                            await _audioPlayer.setUrl(sound);
+                            await _audioPlayer.play(sound);
+                            setState(() {
+                              _currentlyPlaying = sound;
+                            });
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            );
+          },
+        );
+      },
+    );
+    if (selectedSound != null) {
+      setState(() {
+        _sound = selectedSound;
+      });
+    }
+    await _audioPlayer.stop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
+        title: Text(widget.alarm == null ? 'Add Alarm' : 'Edit Alarm'),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      body: Padding(
+        padding: EdgeInsets.all(16.0),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Invoke "debug painting" (press "p" in the console, choose the
-          // "Toggle Debug Paint" action from the Flutter Inspector in Android
-          // Studio, or the "Toggle Debug Paint" command in Visual Studio Code)
-          // to see the wireframe for each widget.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text(
-              'You have pushed the button this many times:',
+          children: [
+            ListTile(
+              title: Text('Time'),
+              trailing: Text(_time.format(context)),
+              onTap: () async {
+                TimeOfDay? newTime = await showTimePicker(
+                  context: context,
+                  initialTime: _time,
+                );
+                if (newTime != null) {
+                  setState(() {
+                    _time = newTime;
+                  });
+                }
+              },
             ),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+            ListTile(
+              title: Text('Sound'),
+              trailing: Text(_sound.split('/').last),
+              onTap: _selectSound,
+            ),
+            SwitchListTile(
+              title: Text('Vibration'),
+              value: _vibration,
+              onChanged: (bool value) {
+                setState(() {
+                  _vibration = value;
+                });
+              },
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(
+                  context,
+                  Alarm(time: _time, sound: _sound, vibration: _vibration),
+                );
+              },
+              child: Text('Save'),
             ),
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
+    );
+  }
+}
+
+class AlarmRingingScreen extends StatelessWidget {
+  final Alarm alarm;
+  final AudioPlayer _player = AudioPlayer();
+
+  AlarmRingingScreen({required this.alarm});
+
+  void _stopSound() async {
+    await _player.stop();
+  }
+
+  void _startVibration() {
+    if (alarm.vibration) {
+      Vibration.vibrate(pattern: [0, 1000, 500, 1000], repeat: 0);
+    }
+  }
+
+  void _playSound() async {
+    await _player.setUrl(alarm.sound);
+    await _player.play(alarm.sound, isLocal: false); // Adjusted to play remote sound
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _startVibration();
+    _playSound();
+    return Scaffold(
+      appBar: AppBar(title: Text('Alarm Ringing')),
+      body: Center(
+        child: ElevatedButton(
+          onPressed: () {
+            _stopSound();
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => VibrationModeScreen(alarm: alarm)),
+            );
+          },
+          child: Text('Stop Sound'),
+        ),
+      ),
+    );
+  }
+}
+
+class VibrationModeScreen extends StatefulWidget {
+  final Alarm alarm;
+
+  VibrationModeScreen({required this.alarm});
+
+  @override
+  _VibrationModeScreenState createState() => _VibrationModeScreenState();
+}
+
+class _VibrationModeScreenState extends State<VibrationModeScreen> {
+  final GlobalKey qrKey = GlobalKey(debugLabel: 'QR');
+  QRViewController? controller;
+
+  @override
+  void dispose() {
+    controller?.dispose();
+    super.dispose();
+  }
+
+  void _stopVibration() {
+    Vibration.cancel();
+  }
+
+  void _onQRViewCreated(QRViewController controller) {
+    this.controller = controller;
+    controller.scannedDataStream.listen((scanData) {
+      _stopVibration();
+      controller.dispose();
+      Navigator.popUntil(context, (route) => route.isFirst);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: Text('Stop Vibration')),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Text('Scan QR code to stop vibration'),
+            SizedBox(
+              width: 300,
+              height: 300,
+              child: QRView(
+                key: qrKey,
+                onQRViewCreated: _onQRViewCreated,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
