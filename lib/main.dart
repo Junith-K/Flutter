@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
 import 'package:qr_code_scanner/qr_code_scanner.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:audioplayers/audioplayers.dart'; // Audio package for alarm sounds
+import 'package:audioplayers/audioplayers.dart';
 import 'dart:convert';
 import 'dart:io';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import local notifications package
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -97,8 +97,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   List<Alarm> alarms = [];
-  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
   @override
   void initState() {
@@ -145,8 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _initializeNotifications() {
-    var initializationSettingsAndroid =
-        AndroidInitializationSettings('app_icon');
+    var initializationSettingsAndroid = AndroidInitializationSettings('app_icon');
     var initializationSettingsIOS = IOSInitializationSettings();
     var initializationSettings = InitializationSettings(
         android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
@@ -259,19 +257,11 @@ class _AddEditAlarmScreenState extends State<AddEditAlarmScreen> {
               children: _sounds.map((String sound) {
                 bool isPlaying = _currentlyPlaying == sound;
                 return SimpleDialogOption(
-                  onPressed: () async {
-                    if (isPlaying) {
-                      await _audioPlayer.stop();
-                      setState(() {
-                        _currentlyPlaying = null;
-                      });
-                    } else {
-                      await _audioPlayer.setUrl(sound);
-                      await _audioPlayer.play(sound);
-                      setState(() {
-                        _currentlyPlaying = sound;
-                      });
-                    }
+                  onPressed: () {
+                    setState(() {
+                      _sound = sound;
+                    });
+                    Navigator.pop(context, sound);
                   },
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -384,7 +374,7 @@ class AlarmRingingScreen extends StatelessWidget {
 
   void _playSound() async {
     await _player.setUrl(alarm.sound);
-    await _player.play(alarm.sound, isLocal: false); // Adjusted to play remote sound
+    await _player.play(alarm.sound, isLocal: false);
   }
 
   @override
