@@ -6,11 +6,15 @@ import 'package:audioplayers/audioplayers.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:android_alarm_manager_plus/android_alarm_manager_plus.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-      FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  // Initialize Android Alarm Manager
+  await AndroidAlarmManager.initialize();
+
   runApp(DualStageAlarmApp(flutterLocalNotificationsPlugin));
 }
 
@@ -153,30 +157,63 @@ class _HomeScreenState extends State<HomeScreen> {
 
   void _scheduleNotifications() {
     flutterLocalNotificationsPlugin.cancelAll();
-    alarms.forEach((alarm) {
+    alarms.forEach((alarm) async {
       if (alarm.enabled) {
-        var time = Time(alarm.time.hour, alarm.time.minute, 0);
-        var androidPlatformChannelSpecifics = AndroidNotificationDetails(
-          'alarm_channel',
-          'Alarms',
-          channelDescription: 'Channel for alarms',
-          importance: Importance.max,
-          priority: Priority.high,
-          sound: RawResourceAndroidNotificationSound('alarm_sound'),
-        );
-        var iOSPlatformChannelSpecifics = IOSNotificationDetails();
-        var platformChannelSpecifics = NotificationDetails(
-            android: androidPlatformChannelSpecifics,
-            iOS: iOSPlatformChannelSpecifics);
-        flutterLocalNotificationsPlugin.showDailyAtTime(
+        var now = DateTime.now();
+        var alarmTime = DateTime(now.year, now.month, now.day, alarm.time.hour, alarm.time.minute);
+        if (alarmTime.isBefore(now)) {
+          alarmTime = alarmTime.add(Duration(days: 1));
+        }
+
+        await AndroidAlarmManager.oneShotAt(
+          alarmTime,
           alarm.hashCode,
-          'Alarm',
-          'Time to wake up!',
-          time,
-          platformChannelSpecifics,
+          _triggerAlarm,
+          exact: true,
+          wakeup: true,
+          rescheduleOnReboot: true,
+          params: {
+            'alarmId': alarm.hashCode,
+            'sound': alarm.sound,
+            'vibration': alarm.vibration,
+          },
         );
       }
     });
+  }
+
+  static Future<void> _triggerAlarm(int alarmId, Map<String, dynamic> params) async {
+    final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+    var androidPlatformChannelSpecifics = AndroidNotificationDetails(
+      'alarm_channel',
+      'Alarms',
+      channelDescription: 'Channel for alarms',
+      importance: Importance.max,
+      priority: Priority.high,
+      sound: RawResourceAndroidNotificationSound('alarm_sound'),
+    );
+    var iOSPlatformChannelSpecifics = IOSNotificationDetails();
+    var platformChannelSpecifics = NotificationDetails(
+        android: androidPlatformChannelSpecifics,
+        iOS: iOSPlatformChannelSpecifics);
+
+    flutterLocalNotificationsPlugin.show(
+      alarmId,
+      'Alarm',
+      'Time to wake up!',
+      platformChannelSpecifics,
+    );
+
+    if (params['vibration'] == true) {
+      Vibration.vibrate(pattern: [0, 1000, 500, 1000], repeat: 0);
+    }
+
+    if (params['sound'] != null) {
+      final AudioPlayer _player = AudioPlayer();
+      await _player.setUrl(params['sound']);
+      await _player.play(params['sound'], isLocal: false);
+    }
   }
 
   @override
